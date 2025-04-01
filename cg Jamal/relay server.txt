@@ -1,0 +1,163 @@
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define PORT1 8072 // Receiving port
+#define PORT2 7890 // Forwarding port
+#define CHUNK_SIZE 1024
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+
+    // Create socket for receiving data
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == 0) {
+        perror("Socket creation failed");
+        return -1;
+    }
+
+    // Bind socket to PORT1
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT1);
+
+    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        return -1;
+    }
+
+    // Listen for incoming connections
+    if (listen(server_fd, 5) < 0) {
+        perror("Listen failed");
+        return -1;
+    }
+
+    printf("Server listening on port %d...\n", PORT1);
+
+    // Accept connection from sender
+    client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
+    if (client_fd < 0) {
+        perror("Accept failed");
+        return -1;
+    }
+    printf("Connection established with sender\n");
+
+    // Read the signature size first
+    uint32_t sig_size;
+    if (read(client_fd, &sig_size, sizeof(sig_size)) != sizeof(sig_size)) {
+        perror("Failed to read signature size");
+        close(client_fd);
+        close(server_fd);
+        return -1;
+    }
+    sig_size = ntohl(sig_size); // Convert from network byte order
+    printf("Signature size: %d bytes\n", sig_size);
+
+    // Allocate memory for the signature
+    unsigned char *signature = (unsigned char *)malloc(sig_size);
+    if (!signature) {
+        perror("Memory allocation failed");
+        close(client_fd);
+        close(server_fd);
+        return -1;
+    }
+
+    // Read the signature in chunks
+    size_t received = 0;
+    ssize_t bytes_read;
+    while (received < sig_size) {
+        bytes_read = read(client_fd, signature + received, sig_size - received);
+        if (bytes_read <= 0) {
+            perror("Error reading signature");
+            free(signature);
+            close(client_fd);
+            close(server_fd);
+            return -1;
+        }
+        received += bytes_read;
+    }
+
+    printf("Received signature (%d bytes):\n", sig_size);
+    for (size_t i = 0; i < sig_size; i++) {
+        printf("%02x ", signature[i]); // Print in hexadecimal format
+    }
+    printf("\n");
+
+    // Close the first connection
+    close(client_fd);
+    close(server_fd);
+
+    // **Now act as a server on PORT2**
+    int forward_server_fd, forward_client_fd;
+    struct sockaddr_in forward_server_addr, forward_client_addr;
+    socklen_t forward_addr_len = sizeof(forward_client_addr);
+
+    forward_server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (forward_server_fd == 0) {
+        perror("Forward server socket creation failed");
+        free(signature);
+        return -1;
+    }
+
+    // Bind socket to PORT2
+    forward_server_addr.sin_family = AF_INET;
+    forward_server_addr.sin_addr.s_addr = INADDR_ANY;
+    forward_server_addr.sin_port = htons(PORT2);
+
+    if (bind(forward_server_fd, (struct sockaddr*)&forward_server_addr, sizeof(forward_server_addr)) < 0) {
+        perror("Bind failed on forward server");
+        free(signature);
+        return -1;
+    }
+
+    // Listen for a client to connect
+    if (listen(forward_server_fd, 5) < 0) {
+        perror("Listen failed on forward server");
+        free(signature);
+        return -1;
+    }
+
+    printf("Waiting for a client to forward the data on port %d...\n", PORT2);
+
+    // Accept connection from receiver client
+    forward_client_fd = accept(forward_server_fd, (struct sockaddr*)&forward_client_addr, &forward_addr_len);
+    if (forward_client_fd < 0) {
+        perror("Accept failed on forward server");
+        free(signature);
+        return -1;
+    }
+    printf("Forwarding connection established\n");
+
+    // Send the signature size first
+    uint32_t net_sig_size = htonl(sig_size);
+    send(forward_client_fd, &net_sig_size, sizeof(net_sig_size), 0);
+
+    // Send the signature in chunks
+    size_t sent = 0;
+    while (sent < sig_size) {
+        ssize_t bytes_sent = send(forward_client_fd, signature + sent, sig_size - sent, 0);
+        if (bytes_sent <= 0) {
+            perror("Error forwarding signature");
+            free(signature);
+            close(forward_client_fd);
+            close(forward_server_fd);
+            return -1;
+        }
+        sent += bytes_sent;
+    }
+
+    printf("Signature forwarded to client on port %d\n", PORT2);
+
+    // Cleanup
+    free(signature);
+    close(forward_client_fd);
+    close(forward_server_fd);
+
+    return 0;
+}

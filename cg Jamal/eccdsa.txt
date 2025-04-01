@@ -1,0 +1,190 @@
+
+
+#include <bits/stdc++.h>
+#include <gmp.h>
+#include <chrono>
+#include <sys/resource.h>
+using namespace std;
+using namespace chrono;
+
+// Function to get memory usage in KB
+size_t getMemoryUsage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return usage.ru_maxrss;
+}
+
+// Generate ECC-DSA Key Pair with proper curve parameters
+void gen_keys(mpz_t d, mpz_t Qx, mpz_t Qy, mpz_t p, mpz_t Gx, mpz_t Gy, mpz_t n) {
+    // Using secp256k1 curve parameters as an example
+    mpz_set_str(p, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F", 16);
+    mpz_set_str(Gx, "79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798", 16);
+    mpz_set_str(Gy, "483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8", 16);
+    mpz_set_str(n, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16);
+
+    gmp_randstate_t state;
+    gmp_randinit_mt(state);
+    gmp_randseed_ui(state, time(NULL));
+
+    // Generate private key d
+    do {
+        mpz_urandomm(d, state, n);
+    } while (mpz_cmp_ui(d, 0) == 0);
+
+    // Q = d * G (simplified point multiplication)
+    mpz_mul(Qx, d, Gx);
+    mpz_mod(Qx, Qx, p);
+    mpz_mul(Qy, d, Gy);
+    mpz_mod(Qy, Qy, p);
+
+    gmp_randclear(state);
+}
+
+// Sign Message
+void sign(mpz_t r, mpz_t s, mpz_t d, mpz_t Gx, mpz_t Gy, mpz_t p, mpz_t n, mpz_t h) {
+    gmp_randstate_t state;
+    gmp_randinit_mt(state);
+    gmp_randseed_ui(state, time(NULL));
+
+    mpz_t k, k_inv, temp;
+    mpz_inits(k, k_inv, temp, NULL);
+
+    while (true) {
+        // Generate random k
+        do {
+            mpz_urandomm(k, state, n);
+        } while (mpz_cmp_ui(k, 0) == 0);
+
+        // r = (k * Gx) mod n
+        mpz_mul(r, k, Gx);
+        mpz_mod(r, r, n);
+
+        if (mpz_cmp_ui(r, 0) == 0) continue;
+
+        // s = k⁻¹ (h + d * r) mod n
+        if (mpz_invert(k_inv, k, n) == 0) continue;  // Check if inverse exists
+
+        mpz_mul(temp, d, r);    // temp = d * r
+        mpz_add(temp, h, temp); // temp = h + d * r
+        mpz_mul(s, k_inv, temp);
+        mpz_mod(s, s, n);
+
+        if (mpz_cmp_ui(s, 0) != 0) break;
+    }
+
+    mpz_clears(k, k_inv, temp, NULL);
+    gmp_randclear(state);
+}
+
+// Verify Signature
+bool verify(mpz_t r, mpz_t s, mpz_t Qx, mpz_t Qy, mpz_t Gx, mpz_t Gy, mpz_t p, mpz_t n, mpz_t h) {
+    // Check if r and s are in valid range
+    if (mpz_cmp_ui(r, 0) <= 0 || mpz_cmp(r, n) >= 0 || 
+        mpz_cmp_ui(s, 0) <= 0 || mpz_cmp(s, n) >= 0) {
+        return false;
+    }
+
+    mpz_t w, u1, u2, temp;
+    mpz_inits(w, u1, u2, temp, NULL);
+
+    // w = s⁻¹ mod n
+    if (mpz_invert(w, s, n) == 0) {
+        mpz_clears(w, u1, u2, temp, NULL);
+        return false;
+    }
+
+    // u1 = h * w mod n
+    mpz_mul(u1, h, w);
+    mpz_mod(u1, u1, n);
+
+    // u2 = r * w mod n
+    mpz_mul(u2, r, w);
+    mpz_mod(u2, u2, n);
+
+    // Simplified verification: v = (u1 * Gx + u2 * Qx) mod n
+    mpz_mul(temp, u1, Gx);
+    mpz_mod(temp, temp, p);
+    mpz_mul(u2, u2, Qx);
+    mpz_mod(u2, u2, p);
+    mpz_add(temp, temp, u2);
+    mpz_mod(temp, temp, n);
+
+    bool valid = (mpz_cmp(temp, r) == 0);
+
+    mpz_clears(w, u1, u2, temp, NULL);
+    return valid;
+}
+
+int main() {
+    mpz_t d, Qx, Qy, p, Gx, Gy, n, r, s, h;
+    mpz_inits(d, Qx, Qy, p, Gx, Gy, n, r, s, h, NULL);
+
+    // Set example message hash
+    mpz_set_str(h, "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF", 16);
+
+    long long totalKeyGenTime = 0, totalSignTime = 0, totalVerifyTime = 0;
+    size_t totalMemUsage = 0, totalSignSize = 0;
+    const size_t messageSize = 32;
+    int iterations = 100;
+
+    for (int i = 0; i < iterations; i++) {
+        auto start = high_resolution_clock::now();
+        gen_keys(d, Qx, Qy, p, Gx, Gy, n);
+        auto end = high_resolution_clock::now();
+        totalKeyGenTime += duration_cast<microseconds>(end - start).count();
+
+        start = high_resolution_clock::now();
+        sign(r, s, d, Gx, Gy, p, n, h);
+        end = high_resolution_clock::now();
+        totalSignTime += duration_cast<nanoseconds>(end - start).count();
+
+        start = high_resolution_clock::now();
+        bool valid = verify(r, s, Qx, Qy, Gx, Gy, p, n, h);
+        end = high_resolution_clock::now();
+        totalVerifyTime += duration_cast<microseconds>(end - start).count();
+
+        totalMemUsage += getMemoryUsage();
+        totalSignSize += (mpz_sizeinbase(r, 2) + mpz_sizeinbase(s, 2) + 14) / 8;
+    }
+
+    double avgSignSize = totalSignSize / (double)iterations;
+    double bandwidthEfficiency = (avgSignSize / messageSize) * 100.0;
+
+    cout << "ECC-DSA SIGNATURE COMPLEXITY ANALYSIS" << endl;
+    cout << "\n1. Key Generation:" << endl;
+
+cout << "   Q = d * G\n";
+
+    cout << "   Average Key Generation Time: " << totalKeyGenTime / (double)iterations << " μs\n";
+
+    cout << "\n2. Signing Process:" << endl;
+
+cout << "   Choose random k, 1 ≤ k < n\n";
+cout << "   r = (k * G).x mod n\n";
+cout << "   s = k⁻¹ (h + d * r) mod n\n";
+    cout << "   Average Signing Time: " << totalSignTime / (double)iterations << " ns\n";
+
+    cout << "\n3. Verification Process:" << endl;
+
+cout << "   w = s⁻¹ mod n\n";
+cout << "   u1 = h * w mod n\n";
+cout << "   u2 = r * w mod n\n";
+cout << "   v = (u1 * G + u2 * Q).x mod n\n";
+cout << "   Accept if v ≡ r (mod n)\n";
+    cout << "   Average Verification Time: " << totalVerifyTime / (double)iterations << " μs\n";
+
+    cout << "\n4. Bandwidth Efficiency:" << endl;
+
+cout << "   Signature Size = |r| + |s|\n";
+cout << "   Bandwidth Efficiency = (Signature Size / Message Size) * 100%\n";
+    cout << "   Average Signature Size: " << avgSignSize << " bytes\n";
+    cout << "   Bandwidth Efficiency: " << bandwidthEfficiency << "%\n";
+
+    cout << "\n5. Memory Usage:" << endl;
+
+cout << "   Depends on key size, curve parameters, and computation overhead.\n";
+    cout << "   Average Memory Usage: " << (totalMemUsage / (double)iterations) / 1024 << " KB\n";
+
+    mpz_clears(d, Qx, Qy, p, Gx, Gy, n, r, s, h, NULL);
+    return 0;
+}

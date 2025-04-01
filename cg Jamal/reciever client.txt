@@ -1,0 +1,82 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define SERVER_IP "127.0.0.1" // Server address
+#define PORT1 7890 // Server port
+#define CHUNK_SIZE 1024 // Read in chunks
+
+int main() {
+    int client_fd;
+    struct sockaddr_in server_addr;
+
+    // Create a socket
+    client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_fd < 0) {
+        perror("Socket creation failed");
+        return -1;
+    }
+
+    // Define server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT1);
+
+    if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0) {
+        perror("Invalid address / Address not supported");
+        return -1;
+    }
+
+    // Connect to the server
+    if (connect(client_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to server failed");
+        return -1;
+    }
+    printf("Connected to server on port %d\n", PORT1);
+
+    // Read the signature size first
+    uint32_t sig_size;
+    if (read(client_fd, &sig_size, sizeof(sig_size)) != sizeof(sig_size)) {
+        perror("Failed to read signature size");
+        close(client_fd);
+        return -1;
+    }
+    sig_size = ntohl(sig_size); // Convert from network byte order
+    printf("Signature size: %d bytes\n", sig_size);
+
+    // Allocate memory for the signature
+    unsigned char *signature = (unsigned char *)malloc(sig_size);
+    if (!signature) {
+        perror("Memory allocation failed");
+        close(client_fd);
+        return -1;
+    }
+
+    // Read the signature in chunks
+    size_t received = 0;
+    ssize_t bytes_read;
+    while (received < sig_size) {
+        bytes_read = read(client_fd, signature + received, sig_size - received);
+        if (bytes_read <= 0) {
+            perror("Error reading signature");
+            free(signature);
+            close(client_fd);
+            return -1;
+        }
+        received += bytes_read;
+    }
+
+    printf("Received signature (%d bytes):\n", sig_size);
+    for (size_t i = 0; i < sig_size; i++) {
+        printf("%02x ", signature[i]); // Print in hexadecimal format
+    }
+    printf("\n");
+
+    // Cleanup
+    free(signature);
+    close(client_fd);
+
+    return 0;
+}

@@ -1,0 +1,146 @@
+
+#include <bits/stdc++.h>
+#include <gmp.h>
+#include <chrono>
+#include <sys/resource.h>
+using namespace std;
+using namespace chrono;
+
+// Function to get memory usage in KB
+size_t getMemoryUsage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return usage.ru_maxrss;
+}
+
+// Function to generate Schnorr keys
+void gen_keys(mpz_t p, mpz_t q, mpz_t g, mpz_t x, mpz_t y) {
+    gmp_randstate_t st;
+    gmp_randinit_mt(st);
+    gmp_randseed_ui(st, time(NULL));
+
+    mpz_urandomb(q, st, 160);
+    mpz_nextprime(q, q);
+    
+    mpz_urandomb(p, st, 512);
+    mpz_nextprime(p, p);
+    
+    mpz_t k;
+    mpz_init(k);
+    mpz_sub_ui(k, p, 1);
+    mpz_divexact(k, k, q);
+
+    mpz_urandomb(g, st, 512);
+    mpz_powm(g, g, k, p);
+
+    mpz_urandomb(x, st, 160);
+    mpz_mod(x, x, q);
+
+    mpz_powm(y, g, x, p);
+
+    mpz_clear(k);
+    gmp_randclear(st);
+}
+
+// Function to sign a message
+void sign(mpz_t s, mpz_t e, mpz_t k, mpz_t g, mpz_t p, mpz_t q, mpz_t x) {
+    gmp_randstate_t state;
+    gmp_randinit_mt(state);
+    gmp_randseed_ui(state, time(NULL));
+
+    mpz_urandomb(k, state, 160);
+    mpz_mod(k, k, q);
+
+    mpz_powm(e, g, k, p);
+    mpz_mod(e, e, q);
+
+    mpz_mul(s, x, e);
+    mpz_add(s, s, k);
+    mpz_mod(s, s, q);
+
+    gmp_randclear(state);
+}
+
+// Function to verify signature
+bool verify(mpz_t s, mpz_t e, mpz_t g, mpz_t p, mpz_t q, mpz_t y) {
+    mpz_t left, right, y_e;
+    mpz_inits(left, right, y_e, NULL);
+
+    mpz_powm(left, g, s, p);
+    mpz_powm(y_e, y, e, p);
+
+    mpz_mul(right, y_e, e);
+    mpz_mod(right, right, p);
+
+    bool valid = (mpz_cmp(left, right) == 0);
+
+    mpz_clears(left, right, y_e, NULL);
+    return valid;
+}
+
+int main() {
+    mpz_t p, q, g, x, y, s, e, k;
+    mpz_inits(p, q, g, x, y, s, e, k, NULL);
+
+    long long totalKeyGenTime = 0, totalSignTime = 0, totalVerifyTime = 0;
+    size_t totalMemUsage = 0, totalSignSize = 0;
+    
+    const size_t messageSize = 32;
+    int iterations = 100;
+
+    for (int i = 0; i < iterations; i++) {
+        auto start = high_resolution_clock::now();
+        gen_keys(p, q, g, x, y);
+        auto end = high_resolution_clock::now();
+        totalKeyGenTime += duration_cast<microseconds>(end - start).count();
+
+        start = high_resolution_clock::now();
+        sign(s, e, k, g, p, q, x);
+        end = high_resolution_clock::now();
+        totalSignTime += duration_cast<nanoseconds>(end - start).count();
+
+        start = high_resolution_clock::now();
+        bool valid = verify(s, e, g, p, q, y);
+        end = high_resolution_clock::now();
+        totalVerifyTime += duration_cast<microseconds>(end - start).count();
+
+        totalMemUsage += getMemoryUsage();
+        totalSignSize += (mpz_sizeinbase(s, 2) + 7) / 8;
+    }
+
+    double avgSignSize = totalSignSize / (double)iterations;
+    double bandwidthEfficiency = (avgSignSize / messageSize) * 100.0;
+
+    cout << "SCHNORR SIGNATURE COMPLEXITY ANALYSIS" << endl;
+    cout << "\n1. Key Generation (p, q, g, x, y):" << endl;
+    cout << "   p = " << mpz_get_str(NULL, 10, p) << endl;
+    cout << "   q = " << mpz_get_str(NULL, 10, q) << endl;
+    cout << "   g = " << mpz_get_str(NULL, 10, g) << endl;
+    cout << "   x = " << mpz_get_str(NULL, 10, x) << endl;
+    cout << "   y = " << mpz_get_str(NULL, 10, y) << endl;
+    cout << "   Formula: y = g^x mod p" << endl;
+    cout << "   Average Key Generation Time: " << totalKeyGenTime / (double)iterations << " μs\n";
+
+    cout << "\n2. Signing Process:" << endl;
+    cout << "   k = " << mpz_get_str(NULL, 10, k) << endl;
+    cout << "   e = " << mpz_get_str(NULL, 10, e) << endl;
+    cout << "   s = " << mpz_get_str(NULL, 10, s) << endl;
+    cout << "   Formula: s = (x * e + k) mod q" << endl;
+    cout << "   Average Signing Time: " << totalSignTime / (double)iterations << " ns\n";
+
+    cout << "\n3. Verification Process:" << endl;
+    cout << "   Formula: g^s mod p == (y^e * e) mod p" << endl;
+    cout << "   Signature Valid: " << (verify(s, e, g, p, q, y) ? "True" : "False") << endl;
+    cout << "   Average Verification Time: " << totalVerifyTime / (double)iterations << " μs\n";
+
+    cout << "\n4. Bandwidth Efficiency:" << endl;
+    cout << "   Formula: (Signature Size / Message Size) × 100%" << endl;
+    cout << "   Bandwidth Efficiency: " << bandwidthEfficiency << "%\n";
+
+    cout << "\n5. Memory Usage:" << endl;
+    cout << "   Average Memory Usage: " << (totalMemUsage / (double)iterations) / 1024 << " KB\n";
+
+    mpz_clears(p, q, g, x, y, s, e, k, NULL);
+    return 0;
+}
+ 

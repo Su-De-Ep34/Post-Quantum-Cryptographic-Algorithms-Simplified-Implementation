@@ -1,0 +1,87 @@
+#include <iostream>
+#include <unordered_map>
+#include <pcap.h>
+#include <openssl/sha.h>
+#include <netinet/ip_icmp.h>
+#include <netinet/ip.h>
+#include <cstring>
+#include <vector>
+
+// Function to compute SHA-1 hash
+std::string sha1Hash(const unsigned char* data, int len) {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(data, len, hash);
+    
+    char hashStr[SHA_DIGEST_LENGTH * 2 + 1];
+    for (int i = 0; i < SHA_DIGEST_LENGTH; i++)
+        sprintf(&hashStr[i * 2], "%02x", hash[i]);
+    
+    return std::string(hashStr);
+}
+
+// Global map to store received signatures
+std::unordered_map<std::string, std::vector<unsigned char>> capturedSignatures;
+
+// Callback function to process ICMP packets
+void packetHandler(unsigned char* user, const struct pcap_pkthdr* header, const unsigned char* packet) {
+    // Extract IP header
+    struct ip* ipHeader = (struct ip*)(packet + 14); // Ethernet header is 14 bytes
+    int ipHeaderLen = ipHeader->ip_hl * 4;
+
+    // Check if it's an ICMP packet
+    if (ipHeader->ip_p != IPPROTO_ICMP) return;
+
+    // Extract ICMP header and payload
+    struct icmphdr* icmpHeader = (struct icmphdr*)((unsigned char*)ipHeader + ipHeaderLen);
+    int icmpHeaderLen = 8;  // Standard ICMP header size
+
+    // Extract payload (potential ECC-DSA signature)
+    int payloadSize = header->caplen - (14 + ipHeaderLen + icmpHeaderLen);
+    if (payloadSize <= 0) return;
+
+    const unsigned char* payload = packet + 14 + ipHeaderLen + icmpHeaderLen;
+
+    // Compute SHA-1 hash of payload
+    std::string hashValue = sha1Hash(payload, payloadSize);
+
+    // Store signature data
+    std::vector<unsigned char> signatureData(payload, payload + payloadSize);
+
+    // Check for hash collision (Birthday Paradox condition)
+    if (capturedSignatures.find(hashValue) != capturedSignatures.end()) {
+        std::cout << "⚠️  Collision Found! Duplicate ECC-DSA signature detected!\n";
+        std::cout << "📜 First Signature Hash: " << hashValue << "\n";
+        std::cout << "🔍 Extracted ECC-DSA Signature (Hex): ";
+        
+        for (unsigned char byte : signatureData)
+            printf("%02x ", byte);
+        std::cout << "\n";
+    } else {
+        capturedSignatures[hashValue] = signatureData;
+        std::cout << "✅ ECC-DSA Signature Captured!\n";
+    }
+}
+
+int main() {
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_if_t* devices;
+    
+    // Find available network devices
+    if (pcap_findalldevs(&devices, errbuf) == -1) {
+        std::cerr << "Error finding devices: " << errbuf << std::endl;
+        return 1;
+    }
+
+    // Select first available device
+    pcap_t* handle = pcap_open_live(devices->name, BUFSIZ, 1, 1000, errbuf);
+    if (!handle) {
+        std::cerr << "Couldn't open device: " << errbuf << std::endl;
+        return 1;
+    }
+
+    std::cout << "📡 Listening for ICMP packets containing ECC-DSA signatures...\n";
+    pcap_loop(handle, 0, packetHandler, nullptr);
+
+    pcap_close(handle);
+    return 0;
+}

@@ -1,0 +1,139 @@
+
+#include <openssl/ecdsa.h>
+#include <openssl/obj_mac.h>
+#include <openssl/sha.h>
+#include <openssl/bn.h>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <iomanip>
+#include <cstring>          // For strlen()
+#include <sys/socket.h>     // For socket functions
+#include <netinet/in.h>     // For sockaddr_in
+#include <arpa/inet.h>      // For inet_addr()
+#include <unistd.h>         // For close()
+
+using namespace std;
+
+#define SERVER_IP "127.0.0.1"
+#define PORT 8072
+
+// Function to print bytes in hexadecimal format
+void print_hex(const string& label, const vector<unsigned char>& data) {
+    cout << label << ": ";
+    for (unsigned char byte : data) {
+        cout << hex << setw(2) << setfill('0') << (int)byte;
+    }
+    cout << dec << endl;  // Reset formatting
+}
+
+// Function to write signature to a file
+void save_signature_to_file(const vector<unsigned char>& signature, const string& filename) {
+    ofstream file(filename);
+    if (!file) {
+        cerr << "Error opening file to save signature!" << endl;
+        return;
+    }
+    for (unsigned char byte : signature) {
+        file << hex << setw(2) << setfill('0') << (int)byte;
+    }
+    file.close();
+}
+
+// Function to generate an EC key pair
+EC_KEY* generate_key() {
+    EC_KEY* key = EC_KEY_new_by_curve_name(NID_secp256k1);  // Using secp256k1 curve
+    if (!key) {
+        cerr << "Error creating EC_KEY object." << endl;
+        return nullptr;
+    }
+    if (!EC_KEY_generate_key(key)) {
+        cerr << "Error generating EC key pair." << endl;
+        EC_KEY_free(key);
+        return nullptr;
+    }
+    return key;
+}
+
+// Function to sign a message using ECDSA
+vector<unsigned char> sign_message(EC_KEY* key, const unsigned char* message, size_t message_len) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(message, message_len, hash);  // Hash the message
+
+    unsigned int sig_len = ECDSA_size(key);
+    vector<unsigned char> signature(sig_len);
+
+    if (!ECDSA_sign(0, hash, SHA256_DIGEST_LENGTH, signature.data(), &sig_len, key)) {
+        cerr << "Error signing message." << endl;
+        return {};
+    }
+
+    signature.resize(sig_len);  // Adjust size to actual signature length
+    return signature;
+}
+
+
+int main() {
+    // Generate EC key pair
+    EC_KEY* key = generate_key();
+    if (!key) return 1;
+
+    // Message to sign
+    const char* message = "welcome to nitw crypto";
+    size_t message_len = strlen(message);
+    cout << "Message: " << message << endl;
+
+    // Sign the message
+    vector<unsigned char> signature = sign_message(key, (const unsigned char*)message, message_len);
+    if (signature.empty()) {
+        cerr << "Failed to sign message." << endl;
+        EC_KEY_free(key);
+        return 1;
+    }
+
+    // Print the signature
+    print_hex("Signature", signature);
+
+    // Save signature to a text file
+    save_signature_to_file(signature, "signature.txt");
+
+    // Free EC key
+    EC_KEY_free(key);
+
+    // ---- SOCKET COMMUNICATION ----
+    int sfd_2;
+    struct sockaddr_in server_addr_2;
+
+    // Create socket
+    sfd_2 = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd_2 < 0) {
+        perror("Socket creation failed");
+        return -1;
+    }
+
+    // Set server address
+    server_addr_2.sin_family = AF_INET;
+    server_addr_2.sin_port = htons(PORT);
+    server_addr_2.sin_addr.s_addr = inet_addr(SERVER_IP);
+
+    // Connect to server
+    if (connect(sfd_2, (struct sockaddr*)&server_addr_2, sizeof(server_addr_2)) < 0) {
+        perror("Connection failed");
+        close(sfd_2);
+        return -1;
+    }
+    printf("Connected to server\n");
+
+    // Send the size of the signature first
+    uint32_t sig_size = htonl(signature.size());
+    send(sfd_2, &sig_size, sizeof(sig_size), 0);
+
+    // Send the actual signature bytes
+    send(sfd_2, signature.data(), signature.size(), 0);
+    printf("Signature sent successfully.\n");
+
+    // Close socket
+    close(sfd_2);
+
+    return 0;
+}

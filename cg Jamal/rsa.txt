@@ -1,0 +1,121 @@
+
+ #include<bits/stdc++.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<unistd.h>
+#include<openssl/sha.h>
+#include<gmp.h>
+#include<chrono>
+#include<sys/resource.h>
+using namespace std;
+using namespace chrono;
+
+string hashing(string& msg){
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_CTX val;
+    SHA256_Init(&val);
+    SHA256_Update(&val, msg.c_str(), msg.size());
+    SHA256_Final(hash, &val);
+    stringstream ss;
+    for(int i=0; i<SHA256_DIGEST_LENGTH; i++){
+        ss<<hex<<setw(2)<<setfill('0')<<(int)hash[i];
+    }
+    return ss.str();
+}
+
+size_t getMemoryUsage(){
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return usage.ru_maxrss; // Memory usage in KB
+}
+
+void encryption(mpz_t encry, mpz_t authdata, mpz_t e, mpz_t n, size_t &enc_size){
+    mpz_powm(encry, authdata, e, n);
+    enc_size = (mpz_sizeinbase(encry, 2) + 7) / 8; // Size in bytes
+}
+
+void decryption(mpz_t data, mpz_t encry, mpz_t d, mpz_t n, size_t &dec_size){
+    mpz_powm(data, encry, d, n);
+    dec_size = (mpz_sizeinbase(data, 2) + 7) / 8; // Size in bytes
+}
+
+void gen_keys(mpz_t e, mpz_t n, mpz_t d, mpz_t p, mpz_t q, mpz_t phi_n){
+    gmp_randstate_t st;
+    gmp_randinit_mt(st);
+    gmp_randseed_ui(st, time(NULL));
+    int s = 512;
+    mpz_urandomb(p, st, s);
+    mpz_nextprime(p, p);
+    mpz_urandomb(q, st, s);
+    mpz_nextprime(q, q);
+    mpz_mul(n, p, q);
+    mpz_sub_ui(p, p, 1);
+    mpz_sub_ui(q, q, 1);
+    mpz_mul(phi_n, p, q);
+    mpz_set_ui(e, 65537);
+    mpz_invert(d, e, phi_n);
+    gmp_randclear(st);
+}
+
+int main(){
+    mpz_t e, n, d, authdata, encry, data, p, q, phi_n;
+    mpz_inits(e, n, d, authdata, encry, data, p, q, phi_n, NULL);
+
+    long long totalKeyGenTime = 0, totalEncTime = 0, totalDecTime = 0;
+    size_t totalEncSize = 0, totalDecSize = 0;
+    size_t totalMemUsageBefore = 0, totalMemUsageAfter = 0;
+
+    auto start = high_resolution_clock::now();
+    gen_keys(e, n, d, p, q, phi_n);
+    auto end = high_resolution_clock::now();
+    totalKeyGenTime = duration_cast<microseconds>(end - start).count();
+
+    cout << "1. Key Generation:\n";
+    cout << "   p = " << mpz_get_str(NULL, 10, p) << "\n";
+    cout << "   q = " << mpz_get_str(NULL, 10, q) << "\n";
+    cout << "   n = p * q = " << mpz_get_str(NULL, 10, n) << "\n";
+    cout << "   φ(n) = (p-1) * (q-1) = " << mpz_get_str(NULL, 10, phi_n) << "\n";
+    cout << "   d = e⁻¹ mod φ(n) = " << mpz_get_str(NULL, 10, d) << "\n";
+    cout << "   Average Key Generation Time: " << totalKeyGenTime << " μs\n\n";
+
+    string msg = "Benchmark Test Message";
+    string data_str = msg + hashing(msg);
+    mpz_import(authdata, data_str.size(), 1, 1, 0, 0, data_str.c_str());
+
+    totalMemUsageBefore = getMemoryUsage();
+    start = high_resolution_clock::now();
+    encryption(encry, authdata, e, n, totalEncSize);
+    end = high_resolution_clock::now();
+    totalEncTime = duration_cast<microseconds>(end - start).count();
+
+    cout << "2. Encryption (Signing):\n";
+    cout << "   C = M^e mod n\n";
+    cout << "   Encrypted Value (C): " << mpz_get_str(NULL, 10, encry) << "\n";
+    cout << "   Average Encryption Time: " << totalEncTime << " μs\n\n";
+
+    start = high_resolution_clock::now();
+    decryption(data, encry, d, n, totalDecSize);
+    end = high_resolution_clock::now();
+    totalDecTime = duration_cast<microseconds>(end - start).count();
+
+    cout << "3. Decryption (Verification):\n";
+    cout << "   M = C^d mod n\n";
+    cout << "   Decrypted Value (M): " << mpz_get_str(NULL, 10, data) << "\n";
+    cout << "   Average Decryption Time: " << totalDecTime << " μs\n\n";
+
+    cout << "4. Bandwidth Efficiency:\n";
+    cout << "   Bandwidth Efficiency = (Encrypted Size / Decrypted Size) × 100%\n";
+    cout << "   Encrypted Size: " << totalEncSize << " bytes\n";
+    cout << "   Decrypted Size: " << totalDecSize << " bytes\n";
+    cout << "   Bandwidth Efficiency: " << ((double)totalEncSize / totalDecSize) * 100 << "%\n\n";
+
+    totalMemUsageAfter = getMemoryUsage();
+    cout << "5. Memory Usage:\n";
+    cout << "   Memory Usage Before Encryption & Decryption: " << (totalMemUsageBefore / 1024.0) << " KB\n";
+    cout << "   Memory Usage After Encryption & Decryption: " << (totalMemUsageAfter / 1024.0) << " KB\n";
+    cout << "   Difference in Memory Usage: " << ((totalMemUsageAfter - totalMemUsageBefore) / 1024.0) << " KB\n\n";
+
+    mpz_clears(e, n, d, authdata, encry, data, p, q, phi_n, NULL);
+    return 0;
+} 
+

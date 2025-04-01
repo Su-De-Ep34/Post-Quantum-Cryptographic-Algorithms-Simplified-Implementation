@@ -1,0 +1,19 @@
+
+#include <iostream>
+#include <cstdlib>
+
+void pingServer(const std::string& ip) {
+    std::string command = "ping -c 4 " + ip; // For Windows, use "ping -n 4"
+    int result = system(command.c_str());
+    if (result == 0)
+        std::cout << "Server " << ip << " is reachable.\n";
+    else
+        std::cout << "Server " << ip << " is not reachable.\n";
+}
+
+int main() {
+    std::string serverIP = "192.168.1.100"; // Replace with your target server IP
+    pingServer(serverIP);
+    return 0;
+}
+
